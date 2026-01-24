@@ -16,8 +16,6 @@ interface Message {
 // --- 設定 ---
 const getApiKey = (): string => {
   try {
-    // Vite環境では import.meta.env を使用します
-    // プレビュー環境でのエラー回避のため、条件付きでアクセスします
     // '@ts-expect-error: import.meta.env is only available in Vite environments'
     const env = import.meta?.env;
     return env?.VITE_GEMINI_API_KEY || "";
@@ -46,9 +44,9 @@ ${knowledge}
 2. 回答構成（厳守）:
    - 【結論】: 質問に対する答えを一言で書く。その後に必ず「空行（改行2つ）」を入れてください。
    - 【ポイント】: 箇条書きではなく「1.」「2.」「3.」といった番号付きリストで3点以内に絞って書く。その後に必ず「空行（改行2つ）」を入れてください。
-   - ラベルなし: 「この記事に詳しく書いたよ！」という一言を添えて、最も関連性の高い記事のURLを1つだけ提示してください。
+   - 詳細: 「この記事に詳しく書いたよ！」という一言を添えて、最も関連性の高い記事のURLを1つだけ提示してください。
 3. 表記制限: 回答は極めて簡潔に。Markdownの太字（**）は絶対に使わず、強調は「 」（カギカッコ）を使ってください。
-4. URL制限: 提示するURLは、回答に最も適したものを必ず「1つだけ」に絞ってください。
+4. URL制限: 提示するURLは、回答に最も適したものを必ず「1つだけ」に絞ってください。同じURLや複数のURLを絶対に出さないでください。
 5. 立ち位置: 営業→エンジニア→フリーランス→会社員というあなたの実体験に基づいたアドバイスをしてください。
 `;
 
@@ -66,7 +64,7 @@ const stripHtml = (html: string) => {
 const LinkifiedText = ({ content, isUser }: { content: string, isUser: boolean }) => {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
   const urls = content.match(urlRegex) || [];
-  const uniqueUrls = Array.from(new Set(urls));
+  const uniqueUrls = Array.from(new Set(urls)); 
   const textWithoutUrls = content.replace(urlRegex, '').trim();
 
   return (
@@ -125,9 +123,7 @@ export default function App() {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) setMessages(parsed);
-      } catch {
-        // Ignore parse errors
-      }
+      } catch { /* ignore */ }
     }
     
     setMessages(prev => prev.length > 0 ? prev : [{ 
@@ -201,11 +197,8 @@ export default function App() {
   };
 
   return (
-    <div className="font-sans">
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
-        <h1 className="text-3xl font-black mb-2 italic" style={{ color: THEME_COLOR }}>FURI-LOG</h1>
-        <p className="text-gray-500 text-sm">PRO MODE: Vercel Ready (Clean Code)</p>
-      </div>
+    <div className="bg-transparent">
+      {/* 埋め込み用に不要な背景セクションを削除しました */}
 
       {isOpen && (
         <div className="fixed bottom-24 right-6 w-90 h-130 bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-4">
