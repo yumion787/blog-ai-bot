@@ -208,9 +208,9 @@ export default function App() {
       </div>
 
       {isOpen && (
-        <div className="fixed bottom-24 right-6 w-[360px] h-[520px] bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-4">
+        <div className="fixed bottom-24 right-6 w-90 h-130 bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-4">
           {showConfirm && (
-            <div className="absolute inset-0 z-[60] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-8">
+            <div className="absolute inset-0 z-60 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-8">
               <div className="bg-white rounded-3xl p-8 shadow-2xl w-full text-center">
                 <div className="mx-auto w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mb-6"><AlertTriangle size={32} /></div>
                 <h4 className="font-bold text-slate-800 text-lg mb-2">履歴を消してもいい？</h4>
