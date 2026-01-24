@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { MessageCircle, X, Send, Bot, Loader2, Sparkles, Trash2, ExternalLink, AlertTriangle } from 'lucide-react';
 
 // --- 型定義 ---
