@@ -259,7 +259,20 @@ export default function App() {
 
           <div className="p-4 bg-white border-t border-slate-100 shrink-0">
             <div className="flex gap-2">
-              <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter') handleSendMessage(inputValue); }} placeholder="悩みを聞かせてね！" className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 outline-none transition-all" style={{ caretColor: THEME_COLOR }} />
+              <input 
+                type="text"
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyDown={(e) => {
+                  // 日本語変換中（isComposing）は送信しないように修正
+                  //  if(e.key === 'Enter') 
+                  if(e.key === 'Enter' && !e.nativeEvent.isComposing)
+                    handleSendMessage(inputValue);
+                  }}
+                  placeholder="悩みを聞かせてね！"
+                  className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 outline-none transition-all"
+                  style={{ caretColor: THEME_COLOR }}
+              />
               <button onClick={() => handleSendMessage(inputValue)} disabled={!inputValue.trim() || isLoading} className="text-white p-3 rounded-xl disabled:bg-slate-200 transition-colors shadow-lg" style={!inputValue.trim() || isLoading ? {} : { backgroundColor: THEME_COLOR }}>
                 <Send size={18} />
               </button>
