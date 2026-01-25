@@ -1,8 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { MessageCircle, X, Send, Bot, Loader2, Sparkles, Trash2, ExternalLink, AlertTriangle } from 'lucide-react';
+// 2026/01/25 Firebaseライブラリのインポート
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, type User } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, getDoc } from 'firebase/firestore';
 
 // --- 型定義 ---
 interface WPPost {
+  id: number;
   title: { rendered: string };
   excerpt: { rendered: string };
   link: string;
@@ -13,12 +18,31 @@ interface Message {
   content: string;
 }
 
-// --- 設定 ---
+// 2026/01/25 Firebase対応版
+// --- Firebase設定（Environment Variablesから取得） ---
+const getFirebaseConfig = () => {
+  try {
+    // "@ts-expect-error: import.meta.env is only available in Vite"
+    const configStr = import.meta?.env?.VITE_FIREBASE_CONFIG;
+    return configStr ? JSON.parse(configStr) : {};
+  } catch (e) {
+    console.error("Firebase Config Error:", e);
+    return {};
+  }
+};
+
+const firebaseConfig = getFirebaseConfig();
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const APP_ID = 'yumion-ai'; // Firestore内のデータ識別子
+
+
+// --- AI設定 ---
 const getApiKey = (): string => {
   try {
     // '@ts-expect-error: import.meta.env is only available in Vite environments'
-    const env = import.meta?.env;
-    return env?.VITE_GEMINI_API_KEY || "";
+    return import.meta?.env?.VITE_GEMINI_API_KEY || "";
   } catch {
     return "";
   }
@@ -28,26 +52,26 @@ const API_KEY = getApiKey();
 const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${API_KEY}`;
 const STORAGE_KEY = 'yumion_ai_chat_history_v7'; 
-
-const WP_API_BASE = "https://yumion3blog.com/wp-json/wp/v2/posts?per_page=20"; 
+// 2026/01/25 WordPressから取得する記事数（RAG用に多めに設定:per_page=20→100）
+const WP_API_BASE = "https://yumion3blog.com/wp-json/wp/v2/posts?per_page=100";
 const THEME_COLOR = "#359ec4";
 
 const SYSTEM_PROMPT_TEMPLATE = (knowledge: string) => `
 あなたはブログ「フリログ」運営者「yumion」の分身AIメンターです。
-以下の【最新のブログ記事データ】を元に、相談者の不安を解消してください。
+以下の【ブログ記事データ】を元に、相談者の不安を解消してください。
 
-【最新のブログ記事データ】
+【ブログ記事データ】
 ${knowledge}
 
 【回答ルール】
-1. キャラクター: 30代の穏やかで頼れる兄貴分。親しみやすく、柔らかい言葉遣いで答えてください。
-2. 回答構成（厳守）:
-   - 【結論】: 質問に対する答えを一言で書く。その後に必ず「空行（改行2つ）」を入れてください。
-   - 【ポイント】: 箇条書きではなく「1.」「2.」「3.」といった番号付きリストで3点以内に絞って書く。その後に必ず「空行（改行2つ）」を入れてください。
-   - 詳細: 「この記事に詳しく書いたよ！」という一言を添えて、最も関連性の高い記事のURLを1つだけ提示してください。
-3. 表記制限: 回答は極めて簡潔に。Markdownの太字（**）は絶対に使わず、強調は「 」（カギカッコ）を使ってください。
-4. URL制限: 提示するURLは、回答に最も適したものを必ず「1つだけ」に絞ってください。同じURLや複数のURLを絶対に出さないでください。
-5. 立ち位置: 営業→エンジニア→フリーランス→会社員というあなたの実体験に基づいたアドバイスをしてください。
+1. キャラクター: 30代の穏やかで頼れる兄貴分。親しみやすく、柔らかい言葉遣いで。
+2. 回答構成:
+   - 【結論】: 一言で回答。その後に空行。
+   - 【ポイント】: 1. 2. 3. の形式で3点以内。その後に空行。
+   - 詳細: 関連記事のURLを1つだけ提示。
+3. 表記: 強調は「 」を使い、簡潔に答える。
+4. URL: 提示するURLは必ず「1つだけ」にする。
+5. 立ち位置: 営業→エンジニア→フリーランス→会社員という実体験に基づくアドバイスを行う。
 `;
 
 const QUICK_QUESTIONS = [
@@ -61,6 +85,7 @@ const stripHtml = (html: string) => {
   return html.replace(/<[^>]*>?/gm, '').substring(0, 500); 
 };
 
+// リンク付きテキスト表示コンポーネント
 const LinkifiedText = ({ content, isUser }: { content: string, isUser: boolean }) => {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
   const urls = content.match(urlRegex) || [];
@@ -92,6 +117,7 @@ const LinkifiedText = ({ content, isUser }: { content: string, isUser: boolean }
 
 export default function App() {
   const [isOpen, setIsOpen] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [dynamicKnowledge, setDynamicKnowledge] = useState("");
@@ -100,23 +126,61 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // 1. Firebase認証 (データベースにアクセスするための鍵)
   useEffect(() => {
-    const fetchPosts = async () => {
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (e) {
+        console.error("Auth Error", e);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // 2. 記事の同期 (WordPress -> Firestore) と知識の構築
+  useEffect(() => {
+    if (!user) return;
+
+    const syncAndFetchPosts = async () => {
       try {
         const res = await fetch(WP_API_BASE);
-        const posts = await res.json();
+        const posts: WPPost[] = await res.json();
+        
+        // Firestoreの保存場所 (Rule 1準拠のパス)
+        const postsCollection = collection(db, 'artifacts', APP_ID, 'public', 'data', 'posts');
+
+        for (const p of posts) {
+          const postDocRef = doc(postsCollection, p.id.toString());
+          const snap = await getDoc(postDocRef);
+          
+          // 新規記事、または未保存の記事を自動でFirestoreへ保存
+          if (!snap.exists()) {
+            await setDoc(postDocRef, {
+              title: p.title.rendered,
+              excerpt: stripHtml(p.excerpt.rendered),
+              link: p.link,
+              updatedAt: new Date().toISOString()
+            });
+          }
+        }
+
+        // Geminiに渡す知識テキストを構築
         const knowledgeText = posts
           .filter((p: WPPost) => !p.title.rendered.includes("除外"))
           .map((p: WPPost) => (
             `タイトル: ${p.title.rendered}\n内容: ${stripHtml(p.excerpt.rendered)}\nURL: ${p.link}`
           )).join("\n\n---\n\n");
         setDynamicKnowledge(knowledgeText);
-      } catch {
-        setDynamicKnowledge("過去のブログ記事を参照して回答してください。");
+      } catch (e) {
+        console.error("Sync Error", e);
+        setDynamicKnowledge("過去のブログ記事を元に回答します。");
       }
     };
 
-    fetchPosts();
+    syncAndFetchPosts();
 
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -128,11 +192,11 @@ export default function App() {
     
     setMessages(prev => prev.length > 0 ? prev : [{ 
       role: 'assistant', 
-      content: 'こんにちは！yumionの分身AIだよ。キャリアやお金の悩み、僕の実体験からサクッと答えるね。' 
+      content: 'こんにちは！yumionの分身AIだよ。キャリアやブログ運営の悩み、僕の過去記事から答えるね。' 
     }]);
     
     setIsInitialized(true);
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (isInitialized && messages.length > 0) {
@@ -156,7 +220,7 @@ export default function App() {
     if (!text.trim() || isLoading) return;
     
     if (!API_KEY) {
-      setMessages(prev => [...prev, { role: 'assistant', content: '【設定案内】デプロイ後にAPIキーを設定すると正常に動作します。' }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'APIキーが設定されていません。' }]);
       return;
     }
 
@@ -190,7 +254,7 @@ export default function App() {
         setMessages(prev => [...prev, { role: 'assistant', content: aiText }]);
       }
     } catch {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'ごめんね、エラーが出ちゃったみたい。もう一度送ってみてくれるかな？' }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'ごめんね、エラーが起きたみたい。もう一度送ってみてくれるかな？' }]);
     } finally {
       setIsLoading(false);
     }
@@ -198,8 +262,6 @@ export default function App() {
 
   return (
     <div className="bg-transparent">
-      {/* 埋め込み用に不要な背景セクションを削除しました */}
-
       {isOpen && (
         <div className="fixed bottom-24 right-6 w-90 h-130 bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-4">
           {showConfirm && (
@@ -218,7 +280,7 @@ export default function App() {
           <div className="p-5 text-white flex justify-between items-center shrink-0" style={{ backgroundColor: THEME_COLOR }}>
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center shadow-inner"><Bot size={22} /></div>
-              <p className="font-bold text-sm tracking-tight">yumion AI Mentor</p>
+              <p className="font-bold text-sm tracking-tight">yumion AI Mentor (RAG Beta)</p>
             </div>
             <div className="flex gap-1">
               <button onClick={() => setShowConfirm(true)} className="hover:bg-white/10 p-2 rounded-full text-white/50 hover:text-white"><Trash2 size={18} /></button>
@@ -264,8 +326,7 @@ export default function App() {
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => {
-                  // 日本語変換中（isComposing）は送信しないように修正
-                  //  if(e.key === 'Enter') 
+                  // 日本語変換中のEnterは無視する
                   if(e.key === 'Enter' && !e.nativeEvent.isComposing)
                     handleSendMessage(inputValue);
                   }}
