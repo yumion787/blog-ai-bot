@@ -19,6 +19,7 @@ interface Message {
   content: string;
 }
 
+// Windowオブジェクトの拡張定義（型エラー対策）
 interface CustomWindow extends Window {
   __firebase_config?: string;
   __app_id?: string;
@@ -27,13 +28,13 @@ interface CustomWindow extends Window {
 
 declare const window: CustomWindow;
 
-// --- Firebase Configuration ---
+// --- Firebase構成 ---
 const getFirebaseConfig = () => {
   try {
     if (typeof window.__firebase_config !== 'undefined') {
       return JSON.parse(window.__firebase_config);
     }
-    // "@ts-expect-error: import.meta.env is only available in Vite"
+    // "@ts-expect-error: import.meta.env is only available in Vite environments"
     const configStr = import.meta?.env?.VITE_FIREBASE_CONFIG;
     if (configStr) return JSON.parse(configStr);
   } catch (e) {
@@ -48,25 +49,57 @@ const auth = app ? getAuth(app) : null;
 const db = app ? getFirestore(app) : null;
 const APP_ID = window.__app_id || 'yumion-ai';
 
-// --- AI Configuration ---
-const getApiKey = (): string => {
-  try {
-    // "@ts-expect-error: import.meta.env is only available in Vite"
-    return import.meta?.env?.VITE_GEMINI_API_KEY || "";
-  } catch {
-    return "";
-  }
-};
-
-const API_KEY = getApiKey();
+// --- AI 構成 ---
+// RULE: APIキーは空の文字列に設定する必要があります。実行時に環境によって提供されます。
+const apiKey = ""; 
 const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
-const EMBED_MODEL = "text-embedding-004"; // 埋め込み用モデル
-const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${API_KEY}`;
-const EMBED_URL = `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent?key=${API_KEY}`;
-const STORAGE_KEY = 'yumion_ai_chat_history_v8'; 
+const EMBED_MODEL = "text-embedding-004";
+const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
+const EMBED_URL = `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent?key=${apiKey}`;
+const STORAGE_KEY = 'yumion_ai_chat_history_v9'; 
 
 const WP_API_BASE = "https://yumion3blog.com/wp-json/wp/v2/posts?per_page=100"; 
 const THEME_COLOR = "#359ec4";
+
+// --- Helpers (コンポーネント外に配置して再生成を防止) ---
+
+// 埋め込みベクトルを生成する関数 (Exponential Backoff実装)
+const generateEmbedding = async (text: string, retryCount = 0): Promise<number[] | null> => {
+  try {
+    const response = await fetch(EMBED_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: `models/${EMBED_MODEL}`,
+        content: { parts: [{ text }] }
+      })
+    });
+    if (!response.ok) throw new Error("API Error");
+    const data = await response.json();
+    return data.embedding?.values || null;
+  } catch (e) {
+    if (retryCount < 3) {
+      const delay = Math.pow(2, retryCount) * 1000;
+      await new Promise(r => setTimeout(r, delay));
+      return generateEmbedding(text, retryCount + 1);
+    }
+    console.error("Embedding Generation Failed", e);
+    return null;
+  }
+};
+
+const stripHtml = (html: string, limit = 1000) => {
+  const plainText = html.replace(/<[^>]*>?/gm, '');
+  return plainText.length > limit ? plainText.substring(0, limit) + "..." : plainText;
+};
+
+const cosineSimilarity = (vecA: number[], vecB: number[]) => {
+  const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
+  const magA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
+  const magB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
+  if (magA === 0 || magB === 0) return 0;
+  return dotProduct / (magA * magB);
+};
 
 const SYSTEM_PROMPT_TEMPLATE = (knowledge: string) => `
 あなたはブログ「フリログ」運営者「yumion」の分身AIメンターです。
@@ -83,22 +116,10 @@ ${knowledge}
    - ラベルなし: 「この記事に詳しく書いたよ！」と添えて、最も関連性の高い記事のURLを1つだけ提示。
 3. 表記制限: 強調は「 」（カギカッコ）を使用。Markdownの太字(**)は禁止。
 4. URL制限: 提示するURLは必ず「1つだけ」に絞る。
+5. 立ち位置: 営業→エンジニア→フリーランス→会社員という実体験に基づくアドバイスを行う。
 `;
 
 const QUICK_QUESTIONS = ["未経験からエンジニアになれる？", "フリーランスの節税を教えて", "会社員に戻るってどう？", "質問のコツが知りたい"];
-
-const stripHtml = (html: string, limit = 1000) => {
-  const plainText = html.replace(/<[^>]*>?/gm, '');
-  return plainText.length > limit ? plainText.substring(0, limit) + "..." : plainText;
-};
-
-// --- ベクトル計算用ヘルパー ---
-const cosineSimilarity = (vecA: number[], vecB: number[]) => {
-  const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
-  const magA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
-  const magB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
-  return dotProduct / (magA * magB);
-};
 
 const LinkifiedText = ({ content, isUser }: { content: string, isUser: boolean }) => {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -132,6 +153,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // 1. Auth Initialization (RULE 3)
   useEffect(() => {
     if (!auth) return;
     const initAuth = async () => {
@@ -146,25 +168,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 埋め込みベクトルを生成する関数
-  const generateEmbedding = async (text: string): Promise<number[] | null> => {
-    try {
-      const response = await fetch(EMBED_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: `models/${EMBED_MODEL}`,
-          content: { parts: [{ text }] }
-        })
-      });
-      const data = await response.json();
-      return data.embedding?.values || null;
-    } catch (e) {
-      console.error("Embedding Error", e);
-      return null;
-    }
-  };
-
+  // 2. Data Synchronization (WordPress -> Firestore)
   useEffect(() => {
     if (!user || !db) return;
     const syncPosts = async () => {
@@ -177,7 +181,7 @@ export default function App() {
           const postDocRef = doc(postsCollection, p.id.toString());
           const snap = await getDoc(postDocRef);
           
-          // ベクトルデータ（embedding）がない場合に生成して保存
+          // ベクトルデータ（embedding）がない場合にのみ生成・保存
           if (!snap.exists() || !snap.data().embedding) {
             const title = p.title.rendered;
             const body = stripHtml(p.content.rendered, 1000);
@@ -188,7 +192,7 @@ export default function App() {
               excerpt: stripHtml(p.excerpt.rendered, 200),
               body,
               link: p.link,
-              embedding, // ここにベクトルを保存
+              embedding,
               updatedAt: new Date().toISOString()
             }, { merge: true });
           }
@@ -203,7 +207,7 @@ export default function App() {
         if (Array.isArray(parsed) && parsed.length > 0) setMessages(parsed);
       } catch { /* ignore */ }
     }
-    setMessages(prev => prev.length > 0 ? prev : [{ role: 'assistant', content: 'こんにちは！yumionの分身AIだよ。ブログの全記事から「意味」を汲み取ってアドバイスするね。' }]);
+    setMessages(prev => prev.length > 0 ? prev : [{ role: 'assistant', content: 'こんにちは！yumionの分身AIだよ。ブログの全記事から「意味」を汲み取って、最適なアドバイスをするね。' }]);
     setIsInitialized(true);
   }, [user]);
 
@@ -212,41 +216,52 @@ export default function App() {
     scrollToBottom();
   }, [messages, isInitialized]);
 
-  const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
-  // --- RAG: Vector Search Logic ---
+  // --- RAG: ベクトル検索Logic ---
   const searchRelatedKnowledge = async (queryText: string) => {
     if (!db) return "知識ベースへのアクセス権がありません。";
     try {
       const postsCollection = collection(db, 'artifacts', APP_ID, 'public', 'data', 'posts');
+      // RULE 2: 全てを取得する
       const querySnapshot = await getDocs(postsCollection);
       const allPosts: DocumentData[] = querySnapshot.docs.map(d => d.data());
 
-      // 1. ユーザーの質問をベクトル化
       const queryEmbedding = await generateEmbedding(queryText);
 
       let results: DocumentData[] = [];
 
       if (queryEmbedding) {
-        // 2. コサイン類似度で計算（意味の近さでソート）
+        // コサイン類似度で意味の近さを計算
         const scoredPosts = allPosts
           .filter(p => p.embedding)
-          .map(p => ({ ...p, score: cosineSimilarity(queryEmbedding, p.embedding) }))
-          .sort((a, b) => b.score - a.score);
+          .map(p => ({ 
+            ...p, 
+            score: cosineSimilarity(queryEmbedding, p.embedding as number[]) 
+          }))
+          .sort((a, b) => (b.score || 0) - (a.score || 0));
         
+        // スコアが高い上位4件を抽出
         results = scoredPosts.slice(0, 4);
-      } else {
-        // フォールバック: キーワードマッチ
-        const terms = queryText.toLowerCase().split(/[\s,、。！？]+/).filter(t => t.length > 1);
-        results = allPosts.filter(p => terms.some(t => p.title?.toLowerCase().includes(t) || p.body?.toLowerCase().includes(t))).slice(0, 3);
       }
 
+      // ベクトル検索で十分な結果が出なかった場合のフォールバック（キーワード検索）
+      if (results.length === 0) {
+        const terms = queryText.toLowerCase().split(/[\s,、。！？]+/).filter(t => t.length > 1);
+        results = allPosts.filter(p => 
+          terms.some(t => p.title?.toLowerCase().includes(t) || p.body?.toLowerCase().includes(t))
+        ).slice(0, 3);
+      }
+
+      // それでも空なら最新記事
       if (results.length === 0) results = allPosts.slice(0, 2);
       
       return results.map(p => `タイトル: ${p.title}\n内容: ${p.body || p.excerpt}\nURL: ${p.link}`).join("\n\n---\n\n");
     } catch (e) {
       console.error("Search Error", e);
-      return "情報を検索できませんでした。一般的な知識で回答します。";
+      return "情報を検索できませんでした。一般的なキャリア知識で回答します。";
     }
   };
 
@@ -259,20 +274,38 @@ export default function App() {
 
     try {
       const knowledge = await searchRelatedKnowledge(text);
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: `User Query: ${text}\n\nContext:\n${knowledge}` }] }],
-          systemInstruction: { parts: [{ text: SYSTEM_PROMPT_TEMPLATE(knowledge) }] }
-        })
-      });
-      const data = await response.json();
-      const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (aiResponse) setMessages(prev => [...prev, { role: 'assistant', content: aiResponse }]);
+
+      const generateContent = async (retryCount = 0): Promise<unknown> => {
+        try {
+          const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: `User Query: ${text}\n\nContext:\n${knowledge}` }] }],
+              systemInstruction: { parts: [{ text: SYSTEM_PROMPT_TEMPLATE(knowledge) }] }
+            })
+          });
+          if (!response.ok) throw new Error("Gemini API Error");
+          return await response.json();
+        } catch (e) {
+          if (retryCount < 5) {
+            const delay = Math.pow(2, retryCount) * 1000;
+            await new Promise(r => setTimeout(r, delay));
+            return generateContent(retryCount + 1);
+          }
+          throw e;
+        }
+      };
+
+      const result = await generateContent() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const aiResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      if (aiResponse) {
+        setMessages(prev => [...prev, { role: 'assistant', content: aiResponse }]);
+      }
     } catch (e) {
-      console.error("Send Error", e);
-      setMessages(prev => [...prev, { role: 'assistant', content: 'ちょっと考えがまとまらなかったみたい。もう一度送ってみて！' }]);
+      console.error("Handle Message Error", e);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'ごめんね、ちょっと考えがまとまらなかったみたい。もう一度送ってみて！' }]);
     } finally {
       setIsLoading(false);
     }
@@ -299,7 +332,7 @@ export default function App() {
               <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center shadow-inner"><Bot size={22} /></div>
               <div>
                 <p className="font-bold text-sm tracking-tight leading-none">yumion AI Mentor</p>
-                <p className="text-[10px] text-white/70 mt-1">Vector Search Mode</p>
+                <p className="text-[10px] text-white/70 mt-1 uppercase">Semantic Engine v2.0</p>
               </div>
             </div>
             <div className="flex gap-1">
@@ -319,7 +352,7 @@ export default function App() {
               <div className="flex justify-start">
                 <div className="bg-white px-4 py-2 rounded-full border border-slate-200 shadow-sm flex items-center gap-2">
                   <Loader2 size={14} className="animate-spin" style={{ color: THEME_COLOR }} />
-                  <span className="text-[11px] text-slate-400">意味の近い記事を検索中...</span>
+                  <span className="text-[11px] text-slate-400">最適な知恵を検索中...</span>
                 </div>
               </div>
             )}
@@ -334,7 +367,7 @@ export default function App() {
           </div>
           <div className="p-4 bg-white border-t border-slate-100 shrink-0">
             <div className="flex gap-2">
-              <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter' && !e.nativeEvent.isComposing) handleSendMessage(inputValue); }} placeholder="悩みを聞かせてね！" className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 outline-none transition-all" style={{ caretColor: THEME_COLOR }} />
+              <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter' && !e.nativeEvent.isComposing) handleSendMessage(inputValue); }} placeholder="キャリアやお金の悩み、聞かせてね！" className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 outline-none transition-all" style={{ caretColor: THEME_COLOR }} />
               <button onClick={() => handleSendMessage(inputValue)} disabled={!inputValue.trim() || isLoading} className="text-white p-3 rounded-xl disabled:bg-slate-200 transition-all shadow-lg hover:brightness-110 active:scale-95" style={!inputValue.trim() || isLoading ? {} : { backgroundColor: THEME_COLOR }}><Send size={18} /></button>
             </div>
           </div>
