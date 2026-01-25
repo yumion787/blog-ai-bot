@@ -63,9 +63,19 @@ const getAppId = () => {
 const APP_ID = getAppId();
 
 // --- AI Configuration ---
-const apiKey = ""; // Provided by execution environment
+// getApiKey: 環境変数から取得するロジックを復元
+const getApiKey = (): string => {
+  try {
+    // "@ts-expect-error: import.meta.env is only available in Vite environments"
+    return import.meta?.env?.VITE_GEMINI_API_KEY || "";
+  } catch {
+    return "";
+  }
+};
+
+const API_KEY = getApiKey();
 const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
-const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
+const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${API_KEY}`;
 const STORAGE_KEY = 'yumion_ai_chat_history_v8'; 
 
 const WP_API_BASE = "https://yumion3blog.com/wp-json/wp/v2/posts?per_page=100"; 
@@ -84,7 +94,7 @@ ${knowledge}
    - 【結論】: 質問に対する答えを一言で。その後に空行。
    - 【ポイント】: 1. 2. 3. と番号付きリストで3点以内。その後に空行。
    - ラベルなし: 「この記事に詳しく書いたよ！」と添えて、最も関連性の高い記事のURLを1つだけ提示。
-3. 表記制限: 回答は簡潔に。強調は「 」（カギカッコ）を使用。Markdownの太字(**)は絶対に使わない。
+3. 表記制限: 回答は極めて簡潔に。強調は「 」（カギカッコ）を使用。Markdownの太字(**)は絶対に使わない。
 4. URL制限: 提示するURLは必ず「1つだけ」に絞る。
 5. 立ち位置: 自身のキャリア（営業→エンジニア→フリーランス→会社員）の実体験に基づくアドバイスを行う。
 `;
@@ -226,6 +236,7 @@ export default function App() {
       // Keyword split for basic semantic matching
       const searchTerms = queryText.toLowerCase().split(/[\s,、。！？]+/).filter(t => t.length > 1);
       
+      // 再代入しないため const に変更
       const matchedPosts = allPosts.filter(post => 
         searchTerms.some(term => 
           (post.title?.toLowerCase().includes(term)) || 
@@ -241,7 +252,7 @@ export default function App() {
       ).join("\n\n---\n\n");
     } catch (e) {
       console.error("Retrieval Error:", e);
-      return "情報を検索できませんでした。一般的なキャリア知識で回答します。";
+      return "情報を検索できませんでした。一般的なキャリア知識で回答してください。";
     }
   };
 
@@ -254,11 +265,13 @@ export default function App() {
     setIsLoading(true);
 
     try {
-      // 1. Retrieval Phase: Get relevant articles from "the shelves"
+      // 1. Retrieval Phase
       const knowledge = await searchRelatedKnowledge(text);
 
-      // 2. Generation Phase: Send prompt to Gemini with exponential backoff
+      // 2. Generation Phase
       const generateContent = async (retryCount = 0): Promise<unknown> => {
+        if (!API_KEY) throw new Error("API Key is missing. Check your environment variables.");
+        
         try {
           const response = await fetch(API_URL, {
             method: 'POST',
@@ -270,6 +283,12 @@ export default function App() {
               systemInstruction: { parts: [{ text: SYSTEM_PROMPT_TEMPLATE(knowledge) }] }
             })
           });
+          
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(`Gemini API Error: ${response.status} - ${JSON.stringify(errorData)}`);
+          }
+          
           return await response.json();
         } catch (e) {
           if (retryCount < 5) {
@@ -287,10 +306,11 @@ export default function App() {
       if (aiResponse) {
         setMessages(prev => [...prev, { role: 'assistant', content: aiResponse }]);
       } else {
-        throw new Error("Empty Response");
+        throw new Error("Empty Response from AI");
       }
     } catch (e) {
-      console.error("Generation Error:", e);
+      // エラーの詳細をコンソールに出力してデバッグしやすくする
+      console.error("Detailed handleSendMessage Error:", e);
       setMessages(prev => [...prev, { role: 'assistant', content: 'ごめんね、ちょっと考えがまとまらなかったみたい。もう一度送ってみて！' }]);
     } finally {
       setIsLoading(false);
