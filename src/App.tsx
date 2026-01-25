@@ -1,10 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import { MessageCircle, X, Send, Bot, Loader2, Sparkles, Trash2, ExternalLink, AlertTriangle } from 'lucide-react';
+// Firebase SDK
+import { initializeApp, getApp, getApps } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, type User } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, getDoc, getDocs, type DocumentData } from 'firebase/firestore';
 
-// --- 型定義 ---
+// --- Types ---
 interface WPPost {
+  id: number;
   title: { rendered: string };
   excerpt: { rendered: string };
+  content: { rendered: string }; // 全文取得のために追加
   link: string;
 }
 
@@ -13,12 +19,52 @@ interface Message {
   content: string;
 }
 
-// --- 設定 ---
+// Windowオブジェクトの拡張定義（anyエラー対策）
+interface CustomWindow extends Window {
+  __firebase_config?: string;
+  __app_id?: string;
+  __initial_auth_token?: string;
+}
+
+declare const window: CustomWindow;
+
+// --- Firebase Configuration ---
+const getFirebaseConfig = () => {
+  try {
+    if (typeof window.__firebase_config !== 'undefined') {
+      return JSON.parse(window.__firebase_config);
+    }
+    // "@ts-expect-error: import.meta.env is only available in Vite environments"
+    const configStr = import.meta?.env?.VITE_FIREBASE_CONFIG;
+    if (configStr) {
+      return JSON.parse(configStr);
+    }
+  } catch (e) {
+    console.error("Firebase Config Parse Error:", e);
+  }
+  return null;
+};
+
+const firebaseConfig = getFirebaseConfig();
+
+const app = (firebaseConfig && firebaseConfig.apiKey) 
+  ? (getApps().length > 0 ? getApp() : initializeApp(firebaseConfig)) 
+  : null;
+
+const auth = app ? getAuth(app) : null;
+const db = app ? getFirestore(app) : null;
+
+const getAppId = () => {
+  if (typeof window.__app_id !== 'undefined') return window.__app_id;
+  return 'yumion-ai';
+};
+const APP_ID = getAppId();
+
+// --- AI Configuration ---
 const getApiKey = (): string => {
   try {
-    // '@ts-expect-error: import.meta.env is only available in Vite environments'
-    const env = import.meta?.env;
-    return env?.VITE_GEMINI_API_KEY || "";
+    // "@ts-expect-error: import.meta.env is only available in Vite environments"
+    return import.meta?.env?.VITE_GEMINI_API_KEY || "";
   } catch {
     return "";
   }
@@ -27,44 +73,46 @@ const getApiKey = (): string => {
 const API_KEY = getApiKey();
 const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${API_KEY}`;
-const STORAGE_KEY = 'yumion_ai_chat_history_v7'; 
+const STORAGE_KEY = 'yumion_ai_chat_history_v8'; 
 
-const WP_API_BASE = "https://yumion3blog.com/wp-json/wp/v2/posts?per_page=20"; 
+const WP_API_BASE = "https://yumion3blog.com/wp-json/wp/v2/posts?per_page=100"; 
 const THEME_COLOR = "#359ec4";
 
 const SYSTEM_PROMPT_TEMPLATE = (knowledge: string) => `
 あなたはブログ「フリログ」運営者「yumion」の分身AIメンターです。
-以下の【最新のブログ記事データ】を元に、相談者の不安を解消してください。
+提供された【ブログ記事データ】を知識の根拠として、相談者の不安を解消してください。
+もし関連する知識がない場合は、自身のキャリア（営業→エンジニア→フリーランス→会社員）の実体験に基づいた一般的なアドバイスをしてください。
 
-【最新のブログ記事データ】
+【ブログ記事データ】
 ${knowledge}
 
 【回答ルール】
-1. キャラクター: 30代の穏やかで頼れる兄貴分。親しみやすく、柔らかい言葉遣いで答えてください。
-2. 回答構成（厳守）:
-   - 【結論】: 質問に対する答えを一言で書く。その後に必ず「空行（改行2つ）」を入れてください。
-   - 【ポイント】: 箇条書きではなく「1.」「2.」「3.」といった番号付きリストで3点以内に絞って書く。その後に必ず「空行（改行2つ）」を入れてください。
-   - 詳細: 「この記事に詳しく書いたよ！」という一言を添えて、最も関連性の高い記事のURLを1つだけ提示してください。
-3. 表記制限: 回答は極めて簡潔に。Markdownの太字（**）は絶対に使わず、強調は「 」（カギカッコ）を使ってください。
-4. URL制限: 提示するURLは、回答に最も適したものを必ず「1つだけ」に絞ってください。同じURLや複数のURLを絶対に出さないでください。
-5. 立ち位置: 営業→エンジニア→フリーランス→会社員というあなたの実体験に基づいたアドバイスをしてください。
+1. キャラクター: 30代の穏やかで頼れる兄貴分。親しみやすく、柔らかい言葉遣いで。
+2. 回答構成:
+   - 【結論】: 質問に対する答えを一言で。その後に空行。
+   - 【ポイント】: 1. 2. 3. と番号付きリストで3点以内。その後に空行。
+   - ラベルなし: 「この記事に詳しく書いたよ！」と添えて、最も関連性の高い記事のURLを1つだけ提示。
+3. 表記制限: 回答は簡潔に。強調は「 」（カギカッコ）を使用。Markdownの太字(**)は絶対に使わない。
+4. URL制限: 提示するURLは必ず「1つだけ」に絞る。
 `;
 
 const QUICK_QUESTIONS = [
   "未経験からエンジニアになれる？",
   "フリーランスの節税を教えて",
-  "年収ってどうなった？",
-  "質問するのが怖いです..."
+  "会社員に戻るってどう？",
+  "質問のコツが知りたい"
 ];
 
-const stripHtml = (html: string) => {
-  return html.replace(/<[^>]*>?/gm, '').substring(0, 500); 
+// HTMLタグを除去し、長すぎる場合はカットする関数
+const stripHtml = (html: string, limit = 1000) => {
+  const plainText = html.replace(/<[^>]*>?/gm, '');
+  return plainText.length > limit ? plainText.substring(0, limit) + "..." : plainText;
 };
 
 const LinkifiedText = ({ content, isUser }: { content: string, isUser: boolean }) => {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
   const urls = content.match(urlRegex) || [];
-  const uniqueUrls = Array.from(new Set(urls)); 
+  const uniqueUrls = Array.from(new Set(urls));
   const textWithoutUrls = content.replace(urlRegex, '').trim();
 
   return (
@@ -92,31 +140,65 @@ const LinkifiedText = ({ content, isUser }: { content: string, isUser: boolean }
 
 export default function App() {
   const [isOpen, setIsOpen] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
-  const [dynamicKnowledge, setDynamicKnowledge] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // 1. Auth Initialization
   useEffect(() => {
-    const fetchPosts = async () => {
+    if (!auth) return;
+    const initAuth = async () => {
+      try {
+        const initialToken = window.__initial_auth_token;
+        if (initialToken) {
+          await signInWithCustomToken(auth, initialToken);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (e) {
+        console.error("Auth Initialization Failed:", e);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Data Synchronization (全文保存に対応)
+  useEffect(() => {
+    if (!user || !db) return;
+
+    const syncPosts = async () => {
       try {
         const res = await fetch(WP_API_BASE);
-        const posts = await res.json();
-        const knowledgeText = posts
-          .filter((p: WPPost) => !p.title.rendered.includes("除外"))
-          .map((p: WPPost) => (
-            `タイトル: ${p.title.rendered}\n内容: ${stripHtml(p.excerpt.rendered)}\nURL: ${p.link}`
-          )).join("\n\n---\n\n");
-        setDynamicKnowledge(knowledgeText);
-      } catch {
-        setDynamicKnowledge("過去のブログ記事を参照して回答してください。");
+        const posts: WPPost[] = await res.json();
+        const postsCollection = collection(db, 'artifacts', APP_ID, 'public', 'data', 'posts');
+
+        for (const p of posts) {
+          const postDocRef = doc(postsCollection, p.id.toString());
+          const snap = await getDoc(postDocRef);
+          
+          // 本文データ(body)がない場合、または新規の場合に保存
+          if (!snap.exists() || !snap.data().body) {
+            await setDoc(postDocRef, {
+              title: p.title.rendered,
+              excerpt: stripHtml(p.excerpt.rendered, 200),
+              body: stripHtml(p.content.rendered, 2000), // 検索用に本文を長めに保存
+              link: p.link,
+              updatedAt: new Date().toISOString()
+            }, { merge: true });
+          }
+        }
+      } catch (e) {
+        console.error("Post Sync Error:", e);
       }
     };
 
-    fetchPosts();
+    syncPosts();
 
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -128,11 +210,11 @@ export default function App() {
     
     setMessages(prev => prev.length > 0 ? prev : [{ 
       role: 'assistant', 
-      content: 'こんにちは！yumionの分身AIだよ。キャリアやお金の悩み、僕の実体験からサクッと答えるね。' 
+      content: 'こんにちは！yumionの分身AIだよ。キャリアやブログの悩み、僕の全記事から最適なアドバイスをするね。' 
     }]);
     
     setIsInitialized(true);
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (isInitialized && messages.length > 0) {
@@ -145,20 +227,42 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const clearHistory = () => {
-    const initialMessage: Message[] = [{ role: 'assistant', content: '履歴をリセットしたよ。またいつでも相談してね！' }];
-    setMessages(initialMessage);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(initialMessage));
-    setShowConfirm(false);
+  // --- RAG: Knowledge Retrieval (本文検索対応) ---
+  const searchRelatedKnowledge = async (queryText: string) => {
+    if (!db) return "知識ベースへのアクセス権がありません。";
+
+    try {
+      const postsCollection = collection(db, 'artifacts', APP_ID, 'public', 'data', 'posts');
+      const querySnapshot = await getDocs(postsCollection);
+      const allPosts: DocumentData[] = querySnapshot.docs.map(d => d.data());
+
+      // 検索ワードを細かく分割（1文字の助詞などを除外）
+      const searchTerms = queryText.toLowerCase()
+        .split(/[\s,、。！？]+/)
+        .filter(t => t.length > 1);
+      
+      const matchedPosts = allPosts.filter(post => 
+        searchTerms.some(term => 
+          (post.title?.toLowerCase().includes(term)) || 
+          (post.body?.toLowerCase().includes(term)) || // 本文からも検索
+          (post.excerpt?.toLowerCase().includes(term))
+        )
+      );
+
+      // 関連度の高い順（マッチ数が多い順）に並び替えるなどの処理は将来的に検討
+      const results = matchedPosts.length > 0 ? matchedPosts.slice(0, 5) : allPosts.slice(0, 3);
+      
+      return results.map(p => 
+        `タイトル: ${p.title}\n内容: ${p.body || p.excerpt}\nURL: ${p.link}`
+      ).join("\n\n---\n\n");
+    } catch (e) {
+      console.error("Retrieval Error:", e);
+      return "情報を検索できませんでした。一般的なキャリア知識で回答します。";
+    }
   };
 
   const handleSendMessage = async (text: string) => {
     if (!text.trim() || isLoading) return;
-    
-    if (!API_KEY) {
-      setMessages(prev => [...prev, { role: 'assistant', content: '【設定案内】デプロイ後にAPIキーを設定すると正常に動作します。' }]);
-      return;
-    }
 
     const userMsg: Message = { role: 'user', content: text };
     setMessages(prev => [...prev, userMsg]);
@@ -166,40 +270,57 @@ export default function App() {
     setIsLoading(true);
 
     try {
-      const payload = {
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT_TEMPLATE(dynamicKnowledge) }] },
-        contents: [
-          ...messages.map(m => ({
-            role: m.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: m.content }]
-          })),
-          { role: 'user', parts: [{ text: text }] }
-        ]
+      const knowledge = await searchRelatedKnowledge(text);
+
+      const generateContent = async (retryCount = 0): Promise<unknown> => {
+        if (!API_KEY) throw new Error("API Key is missing.");
+        
+        try {
+          const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                parts: [{ text: `User Query: ${text}\n\nContext knowledge:\n${knowledge}` }]
+              }],
+              systemInstruction: { parts: [{ text: SYSTEM_PROMPT_TEMPLATE(knowledge) }] }
+            })
+          });
+          
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(`Gemini API Error: ${response.status} - ${JSON.stringify(errorData)}`);
+          }
+          
+          return await response.json();
+        } catch (e) {
+          if (retryCount < 5) {
+            const delay = Math.pow(2, retryCount) * 1000;
+            await new Promise(r => setTimeout(r, delay));
+            return generateContent(retryCount + 1);
+          }
+          throw e;
+        }
       };
 
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      const result = await generateContent() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const aiResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
 
-      const data = await response.json();
-      const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      
-      if (aiText) {
-        setMessages(prev => [...prev, { role: 'assistant', content: aiText }]);
+      if (aiResponse) {
+        setMessages(prev => [...prev, { role: 'assistant', content: aiResponse }]);
+      } else {
+        throw new Error("Empty Response from AI");
       }
-    } catch {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'ごめんね、エラーが出ちゃったみたい。もう一度送ってみてくれるかな？' }]);
+    } catch (e) {
+      console.error("Detailed handleSendMessage Error:", e);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'ごめんね、ちょっと考えがまとまらなかったみたい。もう一度送ってみて！' }]);
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="bg-transparent">
-      {/* 埋め込み用に不要な背景セクションを削除しました */}
-
+    <div className="bg-transparent h-screen w-screen relative overflow-hidden font-sans">
       {isOpen && (
         <div className="fixed bottom-24 right-6 w-90 h-130 bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-4">
           {showConfirm && (
@@ -208,7 +329,7 @@ export default function App() {
                 <div className="mx-auto w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mb-6"><AlertTriangle size={32} /></div>
                 <h4 className="font-bold text-slate-800 text-lg mb-2">履歴を消してもいい？</h4>
                 <div className="space-y-3 mt-8">
-                  <button onClick={clearHistory} className="w-full py-3 rounded-xl bg-red-500 text-white text-sm font-bold shadow-lg shadow-red-200">はい、消去します</button>
+                  <button onClick={() => { setMessages([{ role: 'assistant', content: 'リセットしたよ。' }]); localStorage.removeItem(STORAGE_KEY); setShowConfirm(false); }} className="w-full py-3 rounded-xl bg-red-500 text-white text-sm font-bold shadow-lg shadow-red-200">はい、消去します</button>
                   <button onClick={() => setShowConfirm(false)} className="w-full py-3 rounded-xl bg-slate-100 text-slate-600 text-sm font-bold">やっぱりやめる</button>
                 </div>
               </div>
@@ -218,15 +339,18 @@ export default function App() {
           <div className="p-5 text-white flex justify-between items-center shrink-0" style={{ backgroundColor: THEME_COLOR }}>
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center shadow-inner"><Bot size={22} /></div>
-              <p className="font-bold text-sm tracking-tight">yumion AI Mentor</p>
+              <div>
+                <p className="font-bold text-sm tracking-tight leading-none">yumion AI Mentor</p>
+                <p className="text-[10px] text-white/70 mt-1">RAG-Engine v1.1</p>
+              </div>
             </div>
             <div className="flex gap-1">
-              <button onClick={() => setShowConfirm(true)} className="hover:bg-white/10 p-2 rounded-full text-white/50 hover:text-white"><Trash2 size={18} /></button>
-              <button onClick={() => setIsOpen(false)} className="hover:bg-white/10 p-2 rounded-full"><X size={18} /></button>
+              <button onClick={() => setShowConfirm(true)} className="hover:bg-white/10 p-2 rounded-full text-white/50 hover:text-white transition-colors"><Trash2 size={18} /></button>
+              <button onClick={() => setIsOpen(false)} className="hover:bg-white/10 p-2 rounded-full transition-colors"><X size={18} /></button>
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 bg-slate-50/50 space-y-4">
+          <div className="flex-1 overflow-y-auto p-4 bg-slate-50/50 space-y-4 scroll-smooth">
             {messages.map((msg, idx) => (
               <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[85%] p-3.5 rounded-2xl text-[13px] shadow-sm leading-relaxed ${
@@ -242,7 +366,7 @@ export default function App() {
               <div className="flex justify-start">
                 <div className="bg-white px-4 py-2 rounded-full border border-slate-200 shadow-sm flex items-center gap-2">
                   <Loader2 size={14} className="animate-spin" style={{ color: THEME_COLOR }} />
-                  <span className="text-[11px] text-slate-400">yumionが考え中...</span>
+                  <span className="text-[11px] text-slate-400">最適な記事を検索中...</span>
                 </div>
               </div>
             )}
@@ -251,7 +375,7 @@ export default function App() {
 
           <div className="px-4 py-2 bg-white flex gap-2 overflow-x-auto no-scrollbar border-t border-slate-50 shrink-0">
             {QUICK_QUESTIONS.map((q, i) => (
-              <button key={i} onClick={() => { if(!isLoading) handleSendMessage(q); }} className="shrink-0 bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-full text-[10px] font-medium shadow-sm flex items-center gap-1">
+              <button key={i} onClick={() => { if(!isLoading) handleSendMessage(q); }} className="shrink-0 bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-full text-[10px] font-medium shadow-sm flex items-center gap-1 hover:bg-slate-50 transition-colors">
                 <Sparkles size={10} style={{ color: THEME_COLOR }} />{q}
               </button>
             ))}
@@ -260,20 +384,20 @@ export default function App() {
           <div className="p-4 bg-white border-t border-slate-100 shrink-0">
             <div className="flex gap-2">
               <input 
-                type="text"
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={(e) => {
-                  // 日本語変換中（isComposing）は送信しないように修正
-                  //  if(e.key === 'Enter') 
-                  if(e.key === 'Enter' && !e.nativeEvent.isComposing)
-                    handleSendMessage(inputValue);
-                  }}
-                  placeholder="悩みを聞かせてね！"
-                  className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 outline-none transition-all"
-                  style={{ caretColor: THEME_COLOR }}
+                type="text" 
+                value={inputValue} 
+                onChange={(e) => setInputValue(e.target.value)} 
+                onKeyDown={(e) => { if(e.key === 'Enter' && !e.nativeEvent.isComposing) handleSendMessage(inputValue); }} 
+                placeholder="キャリアの悩み、聞かせて！" 
+                className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 outline-none transition-all" 
+                style={{ caretColor: THEME_COLOR }} 
               />
-              <button onClick={() => handleSendMessage(inputValue)} disabled={!inputValue.trim() || isLoading} className="text-white p-3 rounded-xl disabled:bg-slate-200 transition-colors shadow-lg" style={!inputValue.trim() || isLoading ? {} : { backgroundColor: THEME_COLOR }}>
+              <button 
+                onClick={() => handleSendMessage(inputValue)} 
+                disabled={!inputValue.trim() || isLoading} 
+                className="text-white p-3 rounded-xl disabled:bg-slate-200 transition-all shadow-lg hover:brightness-110 active:scale-95" 
+                style={!inputValue.trim() || isLoading ? {} : { backgroundColor: THEME_COLOR }}
+              >
                 <Send size={18} />
               </button>
             </div>
@@ -281,7 +405,11 @@ export default function App() {
         </div>
       )}
 
-      <button onClick={() => setIsOpen(!isOpen)} className={`fixed bottom-8 right-8 w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all z-50 hover:scale-110 active:scale-95 ${isOpen ? 'bg-slate-800 rotate-90 scale-90' : ''}`} style={!isOpen ? { backgroundColor: THEME_COLOR } : {}}>
+      <button 
+        onClick={() => setIsOpen(!isOpen)} 
+        className={`fixed bottom-8 right-8 w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all z-50 hover:scale-110 active:scale-95 ${isOpen ? 'bg-slate-800 rotate-90 scale-90' : ''}`} 
+        style={!isOpen ? { backgroundColor: THEME_COLOR } : {}}
+      >
         {isOpen ? <X size={28} className="text-white" /> : <MessageCircle size={30} className="text-white" />}
       </button>
     </div>
