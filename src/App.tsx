@@ -10,6 +10,7 @@ interface WPPost {
   id: number;
   title: { rendered: string };
   excerpt: { rendered: string };
+  content: { rendered: string }; // 全文取得のために追加
   link: string;
 }
 
@@ -30,11 +31,9 @@ declare const window: CustomWindow;
 // --- Firebase Configuration ---
 const getFirebaseConfig = () => {
   try {
-    // Priority 1: Environment provided global config
     if (typeof window.__firebase_config !== 'undefined') {
       return JSON.parse(window.__firebase_config);
     }
-    // Priority 2: Vite environment variables
     // "@ts-expect-error: import.meta.env is only available in Vite environments"
     const configStr = import.meta?.env?.VITE_FIREBASE_CONFIG;
     if (configStr) {
@@ -48,7 +47,6 @@ const getFirebaseConfig = () => {
 
 const firebaseConfig = getFirebaseConfig();
 
-// Initialize Firebase only if config exists
 const app = (firebaseConfig && firebaseConfig.apiKey) 
   ? (getApps().length > 0 ? getApp() : initializeApp(firebaseConfig)) 
   : null;
@@ -63,7 +61,6 @@ const getAppId = () => {
 const APP_ID = getAppId();
 
 // --- AI Configuration ---
-// getApiKey: 環境変数から取得するロジックを復元
 const getApiKey = (): string => {
   try {
     // "@ts-expect-error: import.meta.env is only available in Vite environments"
@@ -83,7 +80,8 @@ const THEME_COLOR = "#359ec4";
 
 const SYSTEM_PROMPT_TEMPLATE = (knowledge: string) => `
 あなたはブログ「フリログ」運営者「yumion」の分身AIメンターです。
-提供された【ブログ記事データ】のみを知識の根拠として、相談者の不安を解消してください。
+提供された【ブログ記事データ】を知識の根拠として、相談者の不安を解消してください。
+もし関連する知識がない場合は、自身のキャリア（営業→エンジニア→フリーランス→会社員）の実体験に基づいた一般的なアドバイスをしてください。
 
 【ブログ記事データ】
 ${knowledge}
@@ -94,9 +92,8 @@ ${knowledge}
    - 【結論】: 質問に対する答えを一言で。その後に空行。
    - 【ポイント】: 1. 2. 3. と番号付きリストで3点以内。その後に空行。
    - ラベルなし: 「この記事に詳しく書いたよ！」と添えて、最も関連性の高い記事のURLを1つだけ提示。
-3. 表記制限: 回答は極めて簡潔に。強調は「 」（カギカッコ）を使用。Markdownの太字(**)は絶対に使わない。
+3. 表記制限: 回答は簡潔に。強調は「 」（カギカッコ）を使用。Markdownの太字(**)は絶対に使わない。
 4. URL制限: 提示するURLは必ず「1つだけ」に絞る。
-5. 立ち位置: 自身のキャリア（営業→エンジニア→フリーランス→会社員）の実体験に基づくアドバイスを行う。
 `;
 
 const QUICK_QUESTIONS = [
@@ -106,7 +103,11 @@ const QUICK_QUESTIONS = [
   "質問のコツが知りたい"
 ];
 
-const stripHtml = (html: string) => html.replace(/<[^>]*>?/gm, '').substring(0, 500);
+// HTMLタグを除去し、長すぎる場合はカットする関数
+const stripHtml = (html: string, limit = 1000) => {
+  const plainText = html.replace(/<[^>]*>?/gm, '');
+  return plainText.length > limit ? plainText.substring(0, limit) + "..." : plainText;
+};
 
 const LinkifiedText = ({ content, isUser }: { content: string, isUser: boolean }) => {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -147,7 +148,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 1. Auth Initialization (RULE 3)
+  // 1. Auth Initialization
   useEffect(() => {
     if (!auth) return;
     const initAuth = async () => {
@@ -167,7 +168,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Data Synchronization & Initial Setup
+  // 2. Data Synchronization (全文保存に対応)
   useEffect(() => {
     if (!user || !db) return;
 
@@ -180,13 +181,16 @@ export default function App() {
         for (const p of posts) {
           const postDocRef = doc(postsCollection, p.id.toString());
           const snap = await getDoc(postDocRef);
-          if (!snap.exists()) {
+          
+          // 本文データ(body)がない場合、または新規の場合に保存
+          if (!snap.exists() || !snap.data().body) {
             await setDoc(postDocRef, {
               title: p.title.rendered,
-              excerpt: stripHtml(p.excerpt.rendered),
+              excerpt: stripHtml(p.excerpt.rendered, 200),
+              body: stripHtml(p.content.rendered, 2000), // 検索用に本文を長めに保存
               link: p.link,
               updatedAt: new Date().toISOString()
-            });
+            }, { merge: true });
           }
         }
       } catch (e) {
@@ -206,7 +210,7 @@ export default function App() {
     
     setMessages(prev => prev.length > 0 ? prev : [{ 
       role: 'assistant', 
-      content: 'こんにちは！yumionの分身AIだよ。キャリアやブログの悩み、僕の過去記事から最適なアドバイスをするね。' 
+      content: 'こんにちは！yumionの分身AIだよ。キャリアやブログの悩み、僕の全記事から最適なアドバイスをするね。' 
     }]);
     
     setIsInitialized(true);
@@ -223,36 +227,37 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  // --- RAG: Knowledge Retrieval Core Logic ---
+  // --- RAG: Knowledge Retrieval (本文検索対応) ---
   const searchRelatedKnowledge = async (queryText: string) => {
     if (!db) return "知識ベースへのアクセス権がありません。";
 
     try {
       const postsCollection = collection(db, 'artifacts', APP_ID, 'public', 'data', 'posts');
-      // RULE 2: Simple fetch all, filter in memory
       const querySnapshot = await getDocs(postsCollection);
       const allPosts: DocumentData[] = querySnapshot.docs.map(d => d.data());
 
-      // Keyword split for basic semantic matching
-      const searchTerms = queryText.toLowerCase().split(/[\s,、。！？]+/).filter(t => t.length > 1);
+      // 検索ワードを細かく分割（1文字の助詞などを除外）
+      const searchTerms = queryText.toLowerCase()
+        .split(/[\s,、。！？]+/)
+        .filter(t => t.length > 1);
       
-      // 再代入しないため const に変更
       const matchedPosts = allPosts.filter(post => 
         searchTerms.some(term => 
           (post.title?.toLowerCase().includes(term)) || 
+          (post.body?.toLowerCase().includes(term)) || // 本文からも検索
           (post.excerpt?.toLowerCase().includes(term))
         )
       );
 
-      // Default to most recent if no match
+      // 関連度の高い順（マッチ数が多い順）に並び替えるなどの処理は将来的に検討
       const results = matchedPosts.length > 0 ? matchedPosts.slice(0, 5) : allPosts.slice(0, 3);
       
       return results.map(p => 
-        `タイトル: ${p.title}\n内容: ${p.excerpt}\nURL: ${p.link}`
+        `タイトル: ${p.title}\n内容: ${p.body || p.excerpt}\nURL: ${p.link}`
       ).join("\n\n---\n\n");
     } catch (e) {
       console.error("Retrieval Error:", e);
-      return "情報を検索できませんでした。一般的なキャリア知識で回答してください。";
+      return "情報を検索できませんでした。一般的なキャリア知識で回答します。";
     }
   };
 
@@ -265,12 +270,10 @@ export default function App() {
     setIsLoading(true);
 
     try {
-      // 1. Retrieval Phase
       const knowledge = await searchRelatedKnowledge(text);
 
-      // 2. Generation Phase
       const generateContent = async (retryCount = 0): Promise<unknown> => {
-        if (!API_KEY) throw new Error("API Key is missing. Check your environment variables.");
+        if (!API_KEY) throw new Error("API Key is missing.");
         
         try {
           const response = await fetch(API_URL, {
@@ -309,7 +312,6 @@ export default function App() {
         throw new Error("Empty Response from AI");
       }
     } catch (e) {
-      // エラーの詳細をコンソールに出力してデバッグしやすくする
       console.error("Detailed handleSendMessage Error:", e);
       setMessages(prev => [...prev, { role: 'assistant', content: 'ごめんね、ちょっと考えがまとまらなかったみたい。もう一度送ってみて！' }]);
     } finally {
@@ -339,7 +341,7 @@ export default function App() {
               <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center shadow-inner"><Bot size={22} /></div>
               <div>
                 <p className="font-bold text-sm tracking-tight leading-none">yumion AI Mentor</p>
-                <p className="text-[10px] text-white/70 mt-1">RAG-Engine v1.0</p>
+                <p className="text-[10px] text-white/70 mt-1">RAG-Engine v1.1</p>
               </div>
             </div>
             <div className="flex gap-1">
@@ -364,7 +366,7 @@ export default function App() {
               <div className="flex justify-start">
                 <div className="bg-white px-4 py-2 rounded-full border border-slate-200 shadow-sm flex items-center gap-2">
                   <Loader2 size={14} className="animate-spin" style={{ color: THEME_COLOR }} />
-                  <span className="text-[11px] text-slate-400">記事を検索して考え中...</span>
+                  <span className="text-[11px] text-slate-400">最適な記事を検索中...</span>
                 </div>
               </div>
             )}
