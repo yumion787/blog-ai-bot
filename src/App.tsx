@@ -1,10 +1,14 @@
 
 import { useState, useEffect, useRef } from 'react';
-import { MessageCircle, X, Send, Bot, Loader2, Sparkles, Trash2, ExternalLink, AlertTriangle } from 'lucide-react';
+// DELETE : MessageCircle, Compass
+import { X, Send, Loader2, Sparkles, Trash2, ExternalLink, AlertTriangle } from 'lucide-react';
 // Firebase SDK
 import { initializeApp, getApp, getApps } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, type User } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, getDoc, getDocs, type DocumentData } from 'firebase/firestore';
+
+// --- 画像ファイル設定 ---
+const PROFILE_IMAGE_URL = "https://yumion3blog.com/wp-content/uploads/2026/01/b12b3dd4b106caffd3d70cadb4b1c141.png";   // ここにアイコン用画像URLを入れる
 
 // --- Types ---
 interface WPPost {
@@ -348,10 +352,19 @@ export default function App() {
           )}
           <div className="p-5 text-white flex justify-between items-center shrink-0" style={{ backgroundColor: THEME_COLOR }}>
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center shadow-inner"><Bot size={22} /></div>
+              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center shadow-inner">
+              {/* アイコンを画像に変更 */}
+              {/* <Compass size={22} /> */}
+                <img 
+                  src={PROFILE_IMAGE_URL} 
+                  alt="yumion" 
+                  className="w-full h-full object-cover" 
+                  onError={(e) => (e.currentTarget.style.display = 'none')}
+                />
+              </div>
               <div>
-                <p className="font-bold text-sm tracking-tight leading-none">yumion AI Mentor</p>
-                <p className="text-[10px] text-white/70 mt-1 uppercase">Semantic Engine v2.0</p>
+                <p className="font-bold text-sm tracking-tight leading-none">フリログ コンシェルジュ</p>
+                <p className="text-[10px] text-white/70 mt-1 uppercase">あなた専用のキャリア案内所</p>
               </div>
             </div>
             <div className="flex gap-1">
@@ -392,8 +405,31 @@ export default function App() {
           </div>
         </div>
       )}
-      <button onClick={() => setIsOpen(!isOpen)} className={`fixed bottom-8 right-8 w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all z-50 hover:scale-110 active:scale-95 ${isOpen ? 'bg-slate-800 rotate-90 scale-90' : ''}`} style={!isOpen ? { backgroundColor: THEME_COLOR } : {}}>
+      {/* チャット閉じた時のアイコン変更 */}
+      {/* <button onClick={() => setIsOpen(!isOpen)} className={`fixed bottom-8 right-8 w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all z-50 hover:scale-110 active:scale-95 ${isOpen ? 'bg-slate-800 rotate-90 scale-90' : ''}`} style={!isOpen ? { backgroundColor: THEME_COLOR } : {}}>
         {isOpen ? <X size={28} className="text-white" /> : <MessageCircle size={30} className="text-white" />}
+      </button> */}
+      <button 
+        onClick={() => setIsOpen(!isOpen)} 
+        className={`fixed bottom-8 right-8 w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all z-50 hover:scale-110 active:scale-95 overflow-hidden ${isOpen ? 'bg-slate-800 rotate-90 scale-90' : ''}`} 
+        style={!isOpen ? { backgroundColor: THEME_COLOR } : {}}
+      >
+        {isOpen ? (
+          <X size={28} className="text-white" />
+        ) : (
+          <img 
+            src={PROFILE_IMAGE_URL} 
+            alt="open chat" 
+            className="w-full h-full object-cover"
+            onError={(e) => {
+              // 画像がない場合のフォールバック
+              e.currentTarget.style.display = 'none';
+              const icon = document.createElement('div');
+              icon.innerHTML = `<svg viewBox="0 0 24 24" width="30" height="30" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
+              e.currentTarget.parentElement?.appendChild(icon.firstChild as Node);
+            }}
+          />
+        )}
       </button>
     </div>
   );
