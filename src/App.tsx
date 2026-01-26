@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useRef } from 'react';
 import { MessageCircle, X, Send, Bot, Loader2, Sparkles, Trash2, ExternalLink, AlertTriangle } from 'lucide-react';
 // Firebase SDK
@@ -28,7 +29,7 @@ interface CustomWindow extends Window {
 
 declare const window: CustomWindow;
 
-// --- Firebase構成 ---
+// --- Firebase Configuration ---
 const getFirebaseConfig = () => {
   try {
     if (typeof window.__firebase_config !== 'undefined') {
@@ -49,11 +50,21 @@ const auth = app ? getAuth(app) : null;
 const db = app ? getFirestore(app) : null;
 const APP_ID = window.__app_id || 'yumion-ai';
 
-// --- AI 構成 ---
-// RULE: APIキーは空の文字列に設定する必要があります。実行時に環境によって提供されます。
-const apiKey = ""; 
+// --- AI Configuration ---
+// APIキーを取得するロジックを修正
+const getApiKey = (): string => {
+  try {
+    // "@ts-expect-error: import.meta.env is only available in Vite"
+    return import.meta?.env?.VITE_GEMINI_API_KEY || "";
+  } catch {
+    return "";
+  }
+};
+
+const apiKey = getApiKey();
 const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
 const EMBED_MODEL = "text-embedding-004";
+// APIキーが空でないことを確認してURLを構築
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
 const EMBED_URL = `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent?key=${apiKey}`;
 const STORAGE_KEY = 'yumion_ai_chat_history_v9'; 
@@ -61,10 +72,14 @@ const STORAGE_KEY = 'yumion_ai_chat_history_v9';
 const WP_API_BASE = "https://yumion3blog.com/wp-json/wp/v2/posts?per_page=100"; 
 const THEME_COLOR = "#359ec4";
 
-// --- Helpers (コンポーネント外に配置して再生成を防止) ---
+// --- Helpers (コンポーネント外に配置して再生成を防止)---
 
 // 埋め込みベクトルを生成する関数 (Exponential Backoff実装)
 const generateEmbedding = async (text: string, retryCount = 0): Promise<number[] | null> => {
+  if (!apiKey) {
+    console.error("Gemini API Key is missing for Embedding.");
+    return null;
+  }
   try {
     const response = await fetch(EMBED_URL, {
       method: 'POST',
@@ -74,7 +89,7 @@ const generateEmbedding = async (text: string, retryCount = 0): Promise<number[]
         content: { parts: [{ text }] }
       })
     });
-    if (!response.ok) throw new Error("API Error");
+    if (!response.ok) throw new Error(`Embedding API Error: ${response.status}`);
     const data = await response.json();
     return data.embedding?.values || null;
   } catch (e) {
@@ -181,7 +196,6 @@ export default function App() {
           const postDocRef = doc(postsCollection, p.id.toString());
           const snap = await getDoc(postDocRef);
           
-          // ベクトルデータ（embedding）がない場合にのみ生成・保存
           if (!snap.exists() || !snap.data().embedding) {
             const title = p.title.rendered;
             const body = stripHtml(p.content.rendered, 1000);
@@ -243,8 +257,8 @@ export default function App() {
           }))
           .sort((a, b) => (b.score || 0) - (a.score || 0));
         
-        // スコアが高い上位4件を抽出
-        results = scoredPosts.slice(0, 4);
+          // スコアが高い上位4件を抽出
+          results = scoredPosts.slice(0, 4);
       }
 
       // ベクトル検索で十分な結果が出なかった場合のフォールバック（キーワード検索）
@@ -267,6 +281,11 @@ export default function App() {
 
   const handleSendMessage = async (text: string) => {
     if (!text.trim() || isLoading) return;
+    if (!apiKey) {
+      setMessages(prev => [...prev, { role: 'assistant', content: 'APIキーが設定されていないみたい。環境変数を確認してみてね。' }]);
+      return;
+    }
+
     const userMsg: Message = { role: 'user', content: text };
     setMessages(prev => [...prev, userMsg]);
     setInputValue('');
@@ -285,7 +304,7 @@ export default function App() {
               systemInstruction: { parts: [{ text: SYSTEM_PROMPT_TEMPLATE(knowledge) }] }
             })
           });
-          if (!response.ok) throw new Error("Gemini API Error");
+          if (!response.ok) throw new Error(`Gemini API Error: ${response.status}`);
           return await response.json();
         } catch (e) {
           if (retryCount < 5) {
