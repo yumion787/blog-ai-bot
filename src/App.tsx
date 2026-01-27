@@ -337,7 +337,14 @@ export default function App() {
   return (
     <div className="bg-transparent h-screen w-screen relative overflow-hidden font-sans">
       {isOpen && (
-        <div className="fixed bottom-24 right-6 w-90 h-130 bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-4">
+        <div
+          className="fixed bottom-24 right-6 w-90 bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-4"
+          style={{ 
+            height: '520px', 
+            maxHeight: 'calc(100vh - 120px)',  // 上部が見切れないように画面高からマージンを引く
+            maxWidth: 'calc(100vw - 48px)'     // 横も見切れないように
+          }}
+        >
           {showConfirm && (
             <div className="absolute inset-0 z-60 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-8">
               <div className="bg-white rounded-3xl p-8 shadow-2xl w-full text-center">
