@@ -335,14 +335,23 @@ export default function App() {
   };
 
   return (
-    <div className="bg-transparent h-screen w-screen relative overflow-hidden font-sans">
+    /**
+     * 【修正: 20260131】レイアウトバグ修正
+     * pointer-events-none追加:背景部分が背後のブログパーツ（サイドバーやリンクなど）のクリックを邪魔しない
+     */
+    <div className="fixed inset-0 pointer-events-none z-50 flex flex-col font-sans">
       {isOpen && (
-        <div
-          className="fixed bottom-24 right-6 w-90 bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-4"
+        <div 
+          /**
+           * 【修正: 20260131】操作性の確保
+           * pointer-events-auto を設定し、チャット窓内ではクリックが有効になるように。
+           * また、style属性にて画面高に合わせた最大高さを設定し、ヘッダーが見切れる問題を解消。
+           */
+          className="absolute bottom-24 right-6 w-90 bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden pointer-events-auto animate-in fade-in slide-in-from-bottom-4 transition-all"
           style={{ 
             height: '520px', 
-            maxHeight: 'calc(100vh - 120px)',  // 上部が見切れないように画面高からマージンを引く
-            maxWidth: 'calc(100vw - 48px)'     // 横も見切れないように
+            maxHeight: 'calc(100vh - 120px)', // 上部余白を確保して見切れを防止
+            maxWidth: 'calc(100vw - 48px)'    // 横も見切れないように
           }}
         >
           {showConfirm && (
@@ -359,7 +368,7 @@ export default function App() {
           )}
           <div className="p-5 text-white flex justify-between items-center shrink-0" style={{ backgroundColor: THEME_COLOR }}>
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center shadow-inner">
+              <div className="w-10 h-10 rounded-full overflow-hidden bg-white/20 flex items-center justify-center shadow-inner border border-white/10">
               {/* アイコンを画像に変更 */}
               {/* <Compass size={22} /> */}
                 <img 
@@ -412,13 +421,13 @@ export default function App() {
           </div>
         </div>
       )}
-      {/* チャット閉じた時のアイコン変更 */}
-      {/* <button onClick={() => setIsOpen(!isOpen)} className={`fixed bottom-8 right-8 w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all z-50 hover:scale-110 active:scale-95 ${isOpen ? 'bg-slate-800 rotate-90 scale-90' : ''}`} style={!isOpen ? { backgroundColor: THEME_COLOR } : {}}>
-        {isOpen ? <X size={28} className="text-white" /> : <MessageCircle size={30} className="text-white" />}
-      </button> */}
+      
+      {/* 【修正: 20260131】
+          pointer-events-auto をボタンに設定し、閉じてる時もアイコンはクリック可能に。
+      */}
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className={`fixed bottom-8 right-8 w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all z-50 hover:scale-110 active:scale-95 overflow-hidden ${isOpen ? 'bg-slate-800 rotate-90 scale-90' : ''}`} 
+        className={`fixed bottom-8 right-8 w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all z-50 hover:scale-110 active:scale-95 overflow-hidden pointer-events-auto ${isOpen ? 'bg-slate-800 rotate-90 scale-90' : ''}`} 
         style={!isOpen ? { backgroundColor: THEME_COLOR } : {}}
       >
         {isOpen ? (
