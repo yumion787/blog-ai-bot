@@ -342,18 +342,14 @@ export default function App() {
 
   return (
     /**
-     * 【修正: 20260131】
-     * 画面全体を覆わず、右下にのみ配置。
+     * 【修正: 20260131】レイアウト最終調整
+     * iframeの中では fixed を使わず w-full h-full で親に合わせます。
      */
-    <div className="fixed bottom-0 right-0 pointer-events-none z-50 flex flex-col items-end p-4 sm:p-8 font-sans overflow-visible">
+    <div className="w-full h-full pointer-events-none flex flex-col items-end justify-end font-sans overflow-visible bg-transparent">
       {isOpen && (
         <div 
-          className="mb-4 w-90 bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden pointer-events-auto animate-in fade-in slide-in-from-bottom-4 transition-all"
-          style={{ 
-            height: '520px', 
-            maxHeight: 'calc(100vh - 140px)',
-            maxWidth: 'calc(100vw - 48px)'
-          }}
+          className="mb-2 w-full bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden pointer-events-auto animate-in fade-in slide-in-from-bottom-4 transition-all"
+          style={{ height: 'calc(100% - 80px)' }}
         >
           {showConfirm && (
             <div className="absolute inset-0 z-60 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-8">
@@ -370,13 +366,11 @@ export default function App() {
           <div className="p-5 text-white flex justify-between items-center shrink-0" style={{ backgroundColor: THEME_COLOR }}>
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full overflow-hidden bg-white/20 flex items-center justify-center shadow-inner border border-white/10">
-              {/* アイコンを画像に変更 */}
-              {/* <Compass size={22} /> */}
                 <img 
-                  src={PROFILE_IMAGE_URL} 
-                  alt="yumion" 
-                  className="w-full h-full object-cover" 
-                  onError={(e) => (e.currentTarget.style.display = 'none')}
+                src={PROFILE_IMAGE_URL} 
+                alt="yumion" 
+                className="w-full h-full object-cover" 
+                onError={(e) => (e.currentTarget.style.display = 'none')} 
                 />
               </div>
               <div>
@@ -429,12 +423,12 @@ export default function App() {
         style={!isOpen ? { backgroundColor: THEME_COLOR } : {}}
       >
         {isOpen ? 
-          <X size={28} className="text-white" />
-         : 
-          <img
-            src={PROFILE_IMAGE_URL}
-            alt="open chat"
-            className="w-full h-full object-cover"
+          <X size={28} className="text-white" /> 
+        : 
+          <img 
+            src={PROFILE_IMAGE_URL} 
+            alt="open chat" 
+            className="w-full h-full object-cover" 
             onError={(e) => {
                e.currentTarget.style.display = 'none';
                e.currentTarget.parentElement?.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 24 24" width="30" height="30" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>');
