@@ -172,6 +172,12 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // 【追加: 20260131】WordPress側に状態を通知する
+  useEffect(() => {
+    // 親ウィンドウ（WordPress側）に「今開いてるよ/閉じてるよ」とメッセージを送る
+    window.parent.postMessage({ type: 'chat-status', isOpen }, "*");
+  }, [isOpen]);
+
   // 1. Auth Initialization (RULE 3)
   useEffect(() => {
     if (!auth) return;
@@ -336,22 +342,17 @@ export default function App() {
 
   return (
     /**
-     * 【修正: 20260131】レイアウトバグ修正
-     * pointer-events-none追加:背景部分が背後のブログパーツ（サイドバーやリンクなど）のクリックを邪魔しない
+     * 【修正: 20260131】
+     * 画面全体を覆わず、右下にのみ配置。
      */
-    <div className="fixed inset-0 pointer-events-none z-50 flex flex-col font-sans">
+    <div className="fixed bottom-0 right-0 pointer-events-none z-50 flex flex-col items-end p-4 sm:p-8 font-sans overflow-visible">
       {isOpen && (
         <div 
-          /**
-           * 【修正: 20260131】操作性の確保
-           * pointer-events-auto を設定し、チャット窓内ではクリックが有効になるように。
-           * また、style属性にて画面高に合わせた最大高さを設定し、ヘッダーが見切れる問題を解消。
-           */
-          className="absolute bottom-24 right-6 w-90 bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden pointer-events-auto animate-in fade-in slide-in-from-bottom-4 transition-all"
+          className="mb-4 w-90 bg-white rounded-3xl shadow-2xl flex flex-col border border-slate-100 overflow-hidden pointer-events-auto animate-in fade-in slide-in-from-bottom-4 transition-all"
           style={{ 
             height: '520px', 
-            maxHeight: 'calc(100vh - 120px)', // 上部余白を確保して見切れを防止
-            maxWidth: 'calc(100vw - 48px)'    // 横も見切れないように
+            maxHeight: 'calc(100vh - 140px)',
+            maxWidth: 'calc(100vw - 48px)'
           }}
         >
           {showConfirm && (
@@ -415,37 +416,30 @@ export default function App() {
           </div>
           <div className="p-4 bg-white border-t border-slate-100 shrink-0">
             <div className="flex gap-2">
-              <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter' && !e.nativeEvent.isComposing) handleSendMessage(inputValue); }} placeholder="キャリアやお金の悩み、聞かせてね！" className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 outline-none transition-all" style={{ caretColor: THEME_COLOR }} />
+              <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter' && !e.nativeEvent.isComposing) handleSendMessage(inputValue); }} placeholder="悩みを聞かせてね！" className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 outline-none transition-all" style={{ caretColor: THEME_COLOR }} />
               <button onClick={() => handleSendMessage(inputValue)} disabled={!inputValue.trim() || isLoading} className="text-white p-3 rounded-xl disabled:bg-slate-200 transition-all shadow-lg hover:brightness-110 active:scale-95" style={!inputValue.trim() || isLoading ? {} : { backgroundColor: THEME_COLOR }}><Send size={18} /></button>
             </div>
           </div>
         </div>
       )}
       
-      {/* 【修正: 20260131】
-          pointer-events-auto をボタンに設定し、閉じてる時もアイコンはクリック可能に。
-      */}
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className={`fixed bottom-8 right-8 w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all z-50 hover:scale-110 active:scale-95 overflow-hidden pointer-events-auto ${isOpen ? 'bg-slate-800 rotate-90 scale-90' : ''}`} 
+        className={`w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all hover:scale-110 active:scale-95 overflow-hidden pointer-events-auto ${isOpen ? 'bg-slate-800 rotate-90 scale-90' : ''}`} 
         style={!isOpen ? { backgroundColor: THEME_COLOR } : {}}
       >
-        {isOpen ? (
+        {isOpen ? 
           <X size={28} className="text-white" />
-        ) : (
-          <img 
-            src={PROFILE_IMAGE_URL} 
-            alt="open chat" 
+         : 
+          <img
+            src={PROFILE_IMAGE_URL}
+            alt="open chat"
             className="w-full h-full object-cover"
             onError={(e) => {
-              // 画像がない場合のフォールバック
-              e.currentTarget.style.display = 'none';
-              const icon = document.createElement('div');
-              icon.innerHTML = `<svg viewBox="0 0 24 24" width="30" height="30" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
-              e.currentTarget.parentElement?.appendChild(icon.firstChild as Node);
+               e.currentTarget.style.display = 'none';
+               e.currentTarget.parentElement?.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 24 24" width="30" height="30" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>');
             }}
-          />
-        )}
+          />}
       </button>
     </div>
   );
